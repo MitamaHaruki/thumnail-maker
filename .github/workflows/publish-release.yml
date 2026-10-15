@@ -1,0 +1,62 @@
+# release-upload ブランチに送られたインストーラーから、GitHub のリリースを作る。
+# アプリの自動更新は「最新のリリース」に付いている ThumbnailMaker-Setup-<版>.exe を見に来る。
+#   upload/version.txt                     版（例：1.2.0）
+#   upload/notes.md                        リリースの説明（アプリの更新のお知らせにも表示される）
+#   upload/ThumbnailMaker-Setup-<版>.exe   インストーラー
+name: リリースを公開
+
+on:
+  push:
+    branches: [release-upload]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 版とファイルを確かめる
+        id: info
+        run: |
+          set -eu
+          version="$(tr -d ' \r\n' < upload/version.txt)"
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "版の書き方が正しくありません: $version" >&2
+            exit 1
+          fi
+          installer="upload/ThumbnailMaker-Setup-$version.exe"
+          if [ ! -f "$installer" ] || [ "$(head -c 2 "$installer")" != "MZ" ]; then
+            echo "$installer がないか、インストーラーではありません" >&2
+            exit 1
+          fi
+          if [ ! -s upload/notes.md ]; then
+            echo "upload/notes.md がありません" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "installer=$installer" >> "$GITHUB_OUTPUT"
+
+      - name: リリースを作る
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.info.outputs.version }}
+          INSTALLER: ${{ steps.info.outputs.installer }}
+        run: |
+          set -eu
+          if gh release view "v$VERSION" > /dev/null 2>&1; then
+            echo "v$VERSION はすでに公開されています（作り直すときは、先に GitHub でそのリリースを削除してください）" >&2
+            exit 1
+          fi
+          gh release create "v$VERSION" "$INSTALLER" \
+            --target main \
+            --title "サムネイルメーカー $VERSION" \
+            --notes-file upload/notes.md \
+            --latest
